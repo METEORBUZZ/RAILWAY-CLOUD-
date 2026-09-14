@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  postgres:
+    image: postgres:16-alpine
+    container_name: railcloud-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: railcloud_user
+      POSTGRES_PASSWORD: secure_dev_password_2026
+      POSTGRES_DB: railcloud_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U railcloud_user -d railcloud_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: railcloud-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: railcloud-rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Application Microservices
+  auth-service:
+    build:
+      context: ../../application/services/auth-service
+      dockerfile: Dockerfile
+    container_name: railcloud-auth-service
+    ports:
+      - "4001:4001"
+    environment:
+      - PORT=4001
+      - DATABASE_URL=postgresql://railcloud_user:secure_dev_password_2026@postgres:5432/railcloud_db
+      - JWT_SECRET=railcloud_dev_jwt_secret_32_characters
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  train-service:
+    build:
+      context: ../../application/services/train-service
+      dockerfile: Dockerfile
+    container_name: railcloud-train-service
+    ports:
+      - "4002:4002"
+    environment:
+      - PORT=4002
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  booking-service:
+    build:
+      context: ../../application/services/booking-service
+      dockerfile: Dockerfile
+    container_name: railcloud-booking-service
+    ports:
+      - "4003:4003"
+    environment:
+      - PORT=4003
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=postgresql://railcloud_user:secure_dev_password_2026@postgres:5432/railcloud_db
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  payment-service:
+    build:
+      context: ../../application/services/payment-service
+      dockerfile: Dockerfile
+    container_name: railcloud-payment-service
+    ports:
+      - "4004:4004"
+    environment:
+      - PORT=4004
+      - PAYMENT_GATEWAY_PROVIDER=MOCK
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notification-service:
+    build:
+      context: ../../application/services/notification-service
+      dockerfile: Dockerfile
+    container_name: railcloud-notification-service
+    ports:
+      - "4005:4005"
+    environment:
+      - PORT=4005
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

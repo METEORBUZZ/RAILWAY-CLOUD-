@@ -1,0 +1,33 @@
+# Pod Disruption Budgets (PDB) to guarantee high availability during maintenance
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: booking-service-pdb
+  namespace: railcloud
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: booking-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: train-service-pdb
+  namespace: railcloud
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: train-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  namespace: railcloud
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: frontend

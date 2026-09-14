@@ -1,0 +1,183 @@
+openapi: 3.0.3
+info:
+  title: RailCloud - Cloud-Native Railway Ticket Booking Platform API
+  description: Production-grade microservices REST APIs for authentication, train search, concurrent seat locking, PostgreSQL transactions, payment processing, and async notifications.
+  version: 1.0.0
+  contact:
+    name: RailCloud Platform Architecture Team
+    email: architecture@railcloud.internal
+servers:
+  - url: /api
+    description: Current Environment Ingress Gateway
+  - url: https://api.railcloud.internal/api
+    description: Production AWS Application Load Balancer
+
+paths:
+  /auth/register:
+    post:
+      summary: Register new user account
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, fullName, phone]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                fullName: { type: string }
+                phone: { type: string }
+      responses:
+        201:
+          description: User registered successfully
+        409:
+          description: Email or phone already registered
+
+  /auth/login:
+    post:
+      summary: Authenticate user & issue JWT tokens
+      tags: [Authentication]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        200:
+          description: Login successful, returns access & refresh tokens
+        401:
+          description: Invalid credentials
+
+  /auth/profile:
+    get:
+      summary: Get currently authenticated user profile
+      security:
+        - BearerAuth: []
+      tags: [Authentication]
+      responses:
+        200:
+          description: Profile data returned
+
+  /trains/search:
+    get:
+      summary: Search trains between origin and destination with seat availability
+      tags: [Train Service]
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, example: NDLS }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, example: BSB }
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: class
+          in: query
+          schema: { type: string, enum: [ALL, 1A, 2A, 3A, SL, CC, EC] }
+      responses:
+        200:
+          description: List of matching trains with live coach availability
+
+  /trains/{id}:
+    get:
+      summary: Get train details by ID
+      tags: [Train Service]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        200:
+          description: Full train details and coach inventory
+
+  /bookings/lock-seat:
+    post:
+      summary: Acquire temporary Redis distributed lock on seats (TTL 10 minutes)
+      tags: [Booking Concurrency]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trainId, date, seatIds, userId]
+              properties:
+                trainId: { type: string }
+                date: { type: string, format: date }
+                seatIds: { type: array, items: { type: string } }
+                userId: { type: string }
+      responses:
+        200:
+          description: Seats locked successfully in Redis with TTL expiration
+        409:
+          description: Seat lock conflict (seat already locked or booked)
+
+  /bookings:
+    post:
+      summary: Create booking within PostgreSQL transaction with idempotency
+      tags: [Booking Service]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trainId, travelDate, classType, passengers, lockToken]
+      responses:
+        201:
+          description: Booking created in PENDING payment state
+        409:
+          description: Concurrency failure or lock expired
+
+  /bookings/{id}/cancel:
+    post:
+      summary: Cancel confirmed booking & release seats
+      tags: [Booking Service]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        200:
+          description: Booking cancelled, refund computed, RabbitMQ event dispatched
+
+  /payments/create:
+    post:
+      summary: Initialize payment with idempotency key
+      tags: [Payment Service]
+      responses:
+        200:
+          description: Payment session initialized
+
+  /payments/verify:
+    post:
+      summary: Verify payment signature and trigger booking confirmation
+      tags: [Payment Service]
+      responses:
+        200:
+          description: Payment verified, booking confirmed, async notifications dispatched
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

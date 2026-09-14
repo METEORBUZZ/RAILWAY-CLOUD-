@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: railcloud-production
+  namespace: argocd
+  labels:
+    env: production
+    app: railcloud
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: railway-platform
+  source:
+    repoURL: 'https://github.com/railcloud-org/railway-platform.git'
+    targetRevision: main
+    path: devops/kubernetes/overlays/production
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: railcloud
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

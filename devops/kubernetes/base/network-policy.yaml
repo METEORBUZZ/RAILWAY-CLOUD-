@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: railcloud-config
+  namespace: railcloud
+data:
+  NODE_ENV: "production"
+  PORT: "4003"
+  REDIS_HOST: "railcloud-redis.railcloud.svc.cluster.local"
+  REDIS_PORT: "6379"
+  RABBITMQ_URL: "amqp://rabbitmq.railcloud.svc.cluster.local:5672"
+  SEAT_LOCK_TTL_SECONDS: "600"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: railcloud-secrets
+  namespace: railcloud
+type: Opaque
+stringData:
+  # Secrets injected at deploy-time via SealedSecrets or HashiCorp Vault
+  DATABASE_URL: "postgresql://railcloud_user:PLACEHOLDER_DB_PASSWORD@postgres-primary.railcloud.svc.cluster.local:5432/railcloud_db"
+  JWT_SECRET: "PLACEHOLDER_JWT_SECRET_KEY_PRODUCTION_32CHARS"
+  JWT_REFRESH_SECRET: "PLACEHOLDER_JWT_REFRESH_SECRET_KEY_32CHARS"
+---
+# Least-privilege RBAC
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: railcloud-workload-sa
+  namespace: railcloud
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: railcloud-workload-role
+  namespace: railcloud
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: railcloud-workload-rb
+  namespace: railcloud
+subjects:
+  - kind: ServiceAccount
+    name: railcloud-workload-sa
+    namespace: railcloud
+roleRef:
+  kind: Role
+  name: railcloud-workload-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Strict Zero-Trust Network Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: booking-service-netpol
+  namespace: railcloud
+spec:
+  podSelector:
+    matchLabels:
+      app: booking-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 4003
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/16 # VPC internal subnet for RDS & Redis
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5672
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53

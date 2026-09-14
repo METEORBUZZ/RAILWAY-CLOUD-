@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+  - ../../base
+
+images:
+  - name: docker.io/railcloud/railway-booking
+    newTag: v1.4.2
+  - name: docker.io/railcloud/railway-train
+    newTag: v1.4.2
+  - name: docker.io/railcloud/railway-auth
+    newTag: v1.4.2
+  - name: docker.io/railcloud/railway-payment
+    newTag: v1.4.2
+  - name: docker.io/railcloud/railway-notification
+    newTag: v1.4.2
+  - name: docker.io/railcloud/railway-frontend
+    newTag: v1.4.2
+
+patchesStrategicMerge:
+  - |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: booking-service
+      namespace: railcloud
+    spec:
+      replicas: 5

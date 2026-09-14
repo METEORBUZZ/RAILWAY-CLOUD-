@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: railway-platform
+  namespace: argocd
+spec:
+  description: RailCloud Production Core Microservices Project
+  sourceRepos:
+    - 'https://github.com/railcloud-org/railway-platform.git'
+  destinations:
+    - namespace: railcloud
+      server: 'https://kubernetes.default.svc'
+    - namespace: monitoring
+      server: 'https://kubernetes.default.svc'
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

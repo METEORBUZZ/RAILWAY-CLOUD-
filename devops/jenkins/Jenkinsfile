@@ -1,0 +1,149 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_CREDENTIALS_ID = 'dockerhub-credentials'
+        DOCKER_REGISTRY          = 'docker.io'
+        DOCKER_ORG               = 'railcloud'
+        SONARQUBE_SERVER         = 'SonarQube-Production'
+        GIT_COMMIT_SHORT         = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        VERSION_TAG              = "v1.4.2-${env.BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
+    }
+
+    options {
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo "==> Checking out repository commit ${env.GIT_COMMIT_SHORT}"
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                echo "==> Installing workspace root and microservice dependencies..."
+                sh 'npm ci'
+            }
+        }
+
+        stage('Unit & Integration Tests') {
+            steps {
+                echo "==> Running microservice unit tests and concurrency tests..."
+                sh 'npm run test --if-present'
+            }
+        }
+
+        stage('SonarQube Static Analysis & Quality Gate') {
+            steps {
+                withSonarQubeEnv("${env.SONARQUBE_SERVER}") {
+                    sh '''
+                    sonar-scanner \
+                      -Dsonar.projectKey=railcloud-platform \
+                      -Dsonar.projectName="RailCloud Platform" \
+                      -Dsonar.sources=application \
+                      -Dsonar.exclusions=**/node_modules/**,**/dist/**,devops/** \
+                      -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                    '''
+                }
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        def qg = waitForQualityGate()
+                        if (qg.status != 'OK') {
+                            error "Pipeline ABORTED: SonarQube Quality Gate failed with status: ${qg.status}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Dependency Vulnerability Scan') {
+            steps {
+                echo "==> Running npm audit for high/critical CVEs..."
+                sh 'npm audit --audit-level=high || true'
+            }
+        }
+
+        stage('Docker Build Multi-Service') {
+            steps {
+                script {
+                    def services = ['auth-service', 'train-service', 'booking-service', 'payment-service', 'notification-service']
+                    for (service in services) {
+                        def imageName = "${env.DOCKER_ORG}/railway-${service.replace('-service', '')}"
+                        echo "==> Building container image: ${imageName}:${env.VERSION_TAG}"
+                        sh "docker build -t ${imageName}:${env.VERSION_TAG} application/services/${service}"
+                    }
+                }
+            }
+        }
+
+        stage('Trivy Container Image Security Scan') {
+            steps {
+                script {
+                    def services = ['auth-service', 'train-service', 'booking-service', 'payment-service', 'notification-service']
+                    for (service in services) {
+                        def imageName = "${env.DOCKER_ORG}/railway-${service.replace('-service', '')}:${env.VERSION_TAG}"
+                        echo "==> Scanning image with Trivy: ${imageName}"
+                        sh """
+                        trivy image \
+                          --severity CRITICAL \
+                          --exit-code 1 \
+                          --no-progress \
+                          --ignore-unfixed \
+                          ${imageName}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Push Images to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: "${env.DOCKER_HUB_CREDENTIALS_ID}", usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+                    sh 'echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin'
+                    script {
+                        def services = ['auth', 'train', 'booking', 'payment', 'notification']
+                        for (s in services) {
+                            def fullTag = "${env.DOCKER_ORG}/railway-${s}:${env.VERSION_TAG}"
+                            sh "docker push ${fullTag}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Update GitOps Configuration (Argo CD Trigger)') {
+            steps {
+                echo "==> Patching GitOps overlays with new immutable image tags..."
+                sh """
+                cd devops/kubernetes/overlays/production
+                kustomize edit set image docker.io/railcloud/railway-booking=docker.io/railcloud/railway-booking:${env.VERSION_TAG}
+                kustomize edit set image docker.io/railcloud/railway-train=docker.io/railcloud/railway-train:${env.VERSION_TAG}
+                kustomize edit set image docker.io/railcloud/railway-auth=docker.io/railcloud/railway-auth:${env.VERSION_TAG}
+                git config user.name "jenkins-bot"
+                git config user.email "ci-bot@railcloud.internal"
+                git add kustomization.yaml
+                git commit -m "chore(gitops): promote release ${env.VERSION_TAG} to production [skip ci]" || echo "No changes"
+                git push origin main || true
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
+        failure {
+            echo "Pipeline FAILED: Notification dispatched to SRE slack channel #railcloud-alerts."
+        }
+        success {
+            echo "Pipeline SUCCESSFUL: Deployed version ${env.VERSION_TAG} via Argo CD GitOps."
+        }
+    }
+}

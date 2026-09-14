@@ -1,0 +1,295 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum TrainClass {
+  FIRST_AC       @map("1A")
+  SECOND_AC      @map("2A")
+  THIRD_AC       @map("3A")
+  SLEEPER        @map("SL")
+  CHAIR_CAR      @map("CC")
+  EXEC_CHAIR_CAR @map("EC")
+}
+
+enum BerthType {
+  LOWER
+  MIDDLE
+  UPPER
+  SIDE_LOWER
+  SIDE_UPPER
+  WINDOW
+  AISLE
+}
+
+enum SeatStatus {
+  AVAILABLE
+  LOCKED
+  BOOKED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  WAITLIST
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  BOOKING_CREATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+}
+
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  passwordHash String
+  fullName     String
+  phone        String         @unique
+  role         UserRole       @default(USER)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  bookings     Booking[]
+  notifications Notification[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+model Station {
+  id              String          @id @default(uuid())
+  code            String          @unique
+  name            String
+  city            String
+  state           String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  originTrains    Train[]         @relation("OriginStation")
+  destTrains      Train[]         @relation("DestinationStation")
+  schedules       ScheduleStop[]
+
+  @@index([code])
+  @@index([city])
+  @@map("stations")
+}
+
+model Train {
+  id                 String         @id @default(uuid())
+  trainNumber        String         @unique
+  name               String
+  type               String         @default("SUPERFAST_EXPRESS")
+  originStationId    String
+  destStationId      String
+  departureTime      String
+  arrivalTime        String
+  duration           String
+  runsOnDays         String[]       // e.g. ["MON", "TUE", "WED"]
+  rating             Decimal        @default(4.5) @db.Decimal(2, 1)
+  pantryAvailable    Boolean        @default(true)
+  isActive           Boolean        @default(true)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  originStation      Station        @relation("OriginStation", fields: [originStationId], references: [id])
+  destStation        Station        @relation("DestinationStation", fields: [destStationId], references: [id])
+  coaches            Coach[]
+  schedules          ScheduleStop[]
+  bookings           Booking[]
+
+  @@index([trainNumber])
+  @@index([originStationId, destStationId])
+  @@map("trains")
+}
+
+model ScheduleStop {
+  id             String    @id @default(uuid())
+  trainId        String
+  stationId      String
+  stopSequence   Int
+  arrivalTime    String
+  departureTime  String
+  haltMinutes    Int       @default(2)
+  dayNumber      Int       @default(1)
+  distanceKm     Int       @default(0)
+  platform       String    @default("1")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  train          Train     @relation(fields: [trainId], references: [id], onDelete: Cascade)
+  station        Station   @relation(fields: [stationId], references: [id])
+
+  @@unique([trainId, stopSequence])
+  @@index([trainId])
+  @@index([stationId])
+  @@map("schedule_stops")
+}
+
+model Coach {
+  id             String      @id @default(uuid())
+  trainId        String
+  coachCode      String      // e.g. "B1", "B2", "S1", "A1"
+  coachClass     TrainClass
+  totalSeats     Int         @default(72)
+  baseFare       Decimal     @db.Decimal(10, 2)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  train          Train       @relation(fields: [trainId], references: [id], onDelete: Cascade)
+  seats          Seat[]
+
+  @@unique([trainId, coachCode])
+  @@index([trainId])
+  @@map("coaches")
+}
+
+model Seat {
+  id             String       @id @default(uuid())
+  coachId        String
+  seatNumber     Int
+  berthType      BerthType
+  status         SeatStatus   @default(AVAILABLE)
+  version        Int          @default(1) // Optimistic locking version
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  coach          Coach        @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  bookingSeats   BookingSeat[]
+
+  @@unique([coachId, seatNumber])
+  @@index([coachId, status])
+  @@map("seats")
+}
+
+model Booking {
+  id               String          @id @default(uuid())
+  pnr              String          @unique
+  userId           String
+  trainId          String
+  travelDate       DateTime        @db.Date
+  bookingStatus    BookingStatus   @default(PENDING)
+  paymentStatus    PaymentStatus   @default(PENDING)
+  idempotencyKey   String          @unique
+  baseFare         Decimal         @db.Decimal(10, 2)
+  reservationFee   Decimal         @db.Decimal(10, 2)
+  superfastCharge  Decimal         @db.Decimal(10, 2)
+  gstAmount        Decimal         @db.Decimal(10, 2)
+  travelInsurance  Decimal         @default(0.49) @db.Decimal(10, 2)
+  totalAmount      Decimal         @db.Decimal(10, 2)
+  contactEmail     String
+  contactPhone     String
+  cancelledAt      DateTime?
+  refundAmount     Decimal?        @db.Decimal(10, 2)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  user             User            @relation(fields: [userId], references: [id])
+  train            Train           @relation(fields: [trainId], references: [id])
+  passengers       Passenger[]
+  bookingSeats     BookingSeat[]
+  payments         Payment[]
+  notifications    Notification[]
+
+  @@index([pnr])
+  @@index([userId])
+  @@index([trainId, travelDate])
+  @@index([bookingStatus])
+  @@map("bookings")
+}
+
+model Passenger {
+  id               String      @id @default(uuid())
+  bookingId        String
+  name             String
+  age              Int
+  gender           String
+  berthPreference  BerthType
+  concessionType   String      @default("NONE")
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  booking          Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("passengers")
+}
+
+model BookingSeat {
+  id             String    @id @default(uuid())
+  bookingId      String
+  seatId         String
+  travelDate     DateTime  @db.Date
+  allocatedAt    DateTime  @default(now())
+
+  booking        Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  seat           Seat      @relation(fields: [seatId], references: [id])
+
+  // Critical constraint: a single physical seat cannot be booked multiple times on the same date!
+  @@unique([seatId, travelDate])
+  @@index([bookingId])
+  @@map("booking_seats")
+}
+
+model Payment {
+  id                  String         @id @default(uuid())
+  bookingId           String
+  idempotencyKey      String         @unique
+  amount              Decimal        @db.Decimal(10, 2)
+  currency            String         @default("INR")
+  paymentMethod       String         // CARD, UPI, NETBANKING
+  status              PaymentStatus  @default(PENDING)
+  transactionRef      String         @unique
+  gatewayResponseCode String         @default("200_OK")
+  errorMessage        String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  booking             Booking        @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId])
+  @@index([transactionRef])
+  @@index([status])
+  @@map("payments")
+}
+
+model Notification {
+  id             String            @id @default(uuid())
+  userId         String?
+  bookingId      String?
+  type           NotificationType
+  channel        String            @default("EMAIL")
+  recipientEmail String
+  recipientPhone String?
+  title          String
+  content        String            @db.Text
+  sentAt         DateTime?
+  status         String            @default("PENDING") // PENDING, SENT, FAILED
+  retryCount     Int               @default(0)
+  createdAt      DateTime          @default(now())
+
+  user           User?             @relation(fields: [userId], references: [id])
+  booking        Booking?          @relation(fields: [bookingId], references: [id])
+
+  @@index([status])
+  @@index([bookingId])
+  @@map("notifications")
+}

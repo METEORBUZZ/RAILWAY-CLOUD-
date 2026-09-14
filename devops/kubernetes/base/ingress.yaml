@@ -1,0 +1,69 @@
+# Kubernetes Ingress with NGINX routing, SSL Termination & Rate Limiting
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: railcloud-ingress
+  namespace: railcloud
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+spec:
+  tls:
+    - hosts:
+        - booking.railcloud.internal
+        - api.railcloud.internal
+      secretName: railcloud-tls-secret
+  rules:
+    - host: booking.railcloud.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+    - host: api.railcloud.internal
+      http:
+        paths:
+          - path: /api/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 4001
+          - path: /api/trains
+            pathType: Prefix
+            backend:
+              service:
+                name: train-service
+                port:
+                  number: 4002
+          - path: /api/bookings
+            pathType: Prefix
+            backend:
+              service:
+                name: booking-service
+                port:
+                  number: 4003
+          - path: /api/payments
+            pathType: Prefix
+            backend:
+              service:
+                name: payment-service
+                port:
+                  number: 4004
+          - path: /api/notifications
+            pathType: Prefix
+            backend:
+              service:
+                name: notification-service
+                port:
+                  number: 4005

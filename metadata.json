@@ -1,0 +1,6 @@
+{
+  "name": "RailCloud - Cloud-Native Railway Booking Platform",
+  "description": "Fast, modern railway ticket booking platform with real-time seat availability, visual coach maps, passenger reservations, and instant e-ticketing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
